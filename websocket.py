@@ -1,6 +1,4 @@
 import sys
-import socket
-from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
@@ -12,12 +10,24 @@ def make_http_request(url):
         soup = BeautifulSoup(response.text, 'html.parser')
         
         all_elements = soup.find_all(['h1', 'h2', 'h3', 'p'])
-        all_text = [element.get_text() for element in all_elements]
+        all_info = []
+        
+        for element in all_elements:
+            if element.name.startswith('h'):
+                if element.name == 'h1':
+                    all_info.append(f"{'----'} {element.get_text()}")
+                elif element.name == 'h2':
+                    all_info.append(f"{'---'} {element.get_text()}")
+                elif element.name == 'h3':
+                    all_info.append(f"{'--'} {element.get_text()}")
+            elif element.name == 'p':
+                all_info.append(f"{'-'} {element.get_text()}")
         
         links = soup.find_all('a', href=True)
         links_href = [link['href'] for link in links if link['href'].startswith('http')]
         
-        all_info = all_text + links_href
+        all_info.append("-- Links --")
+        all_info += links_href
         
         return all_info
     except Exception as e:
