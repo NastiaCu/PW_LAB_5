@@ -14,7 +14,12 @@ def hash_url(url):
     return hashlib.md5(url.encode()).hexdigest()
 
 def cache_response(url, response):
-    db.insert({'url': hash_url(url), 'response': response})
+    if 'text/html' in response:
+        parsed_response = parse_html(response)
+        db.insert({'url': hash_url(url), 'response': parsed_response})
+    else:
+        db.insert({'url': hash_url(url), 'response': json.dumps(response, separators=(',', ':'))
+})
 
 def is_cached(url):
     return db.contains(Query().url == hash_url(url))
@@ -23,61 +28,80 @@ def retrieve_cached_response(url):
     result = db.get(Query().url == hash_url(url))
     return result['response']
 
-def make_tcp_request(url):
-    try:
-        parsed_url = urlparse(url)
-        host = parsed_url.netloc
-        path = parsed_url.path if parsed_url.path else '/'
+def extract_url_data(url):
+    parsed_url = urlparse(url)
 
-        context = ssl.create_default_context()
-        with socket.create_connection((host, 443)) as sock:
-            with context.wrap_socket(sock, server_hostname=host) as s:
-                s.sendall(f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
-                response = b''
-                while True:
-                    data = s.recv(4096)
-                    if not data:
-                        break
-                    response += data
-
-        return response.decode()  
-    except Exception as e:
-        return str(e)
+    port = None
+    if parsed_url.scheme == "https":
+        port = 443
+    elif parsed_url.scheme == "http":
+        port = 80
+    
+    return parsed_url.netloc, port, parsed_url.path
 
 def make_http_request(url):
-    try:
-        if is_cached(url):
-            print("Retrieving cached response for:", url)
-            return retrieve_cached_response(url)
-        
-        response = make_tcp_request(url)
-        
-        if '\r\n\r\n' in response:
-            status_line, headers_and_body = response.split('\r\n\r\n', 1)
-            status_code = int(status_line.split()[1])
-            headers = dict(header.split(": ", 1) for header in status_line.split("\r\n")[1:])
-            content_type = headers.get('Content-Type')
+    if is_cached(url):
+        print("Retrieving cached response:", url)
+        return retrieve_cached_response(url)
 
-            if status_code == 200:
-                if content_type:
-                    if 'text/html' in content_type:
-                        parsed_response = parse_html(headers_and_body)
-                        cache_response(url, parsed_response)  # Cache HTML responses
-                        return parsed_response
-                    elif 'application/json' in content_type:
-                        json_data = json.loads(headers_and_body)
-                        cache_response(url, json_data)  # Cache JSON responses
-                        return json_data
-                    else:
-                        return [f"Unsupported content type: {content_type}"]
-                else:
-                    return [f"Error: Content-Type header not found"]
-            else:
-                return [f"Error: Server returned status code {status_code}"]
-        else:
-            return [f"Error: Invalid HTTP response format"]
-    except Exception as e:
-        return [str(e)]
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    host, port, path = extract_url_data(url)
+    print("Establishing connection:", host, port, path)
+
+    if port == 443:
+        client_socket = ssl.wrap_socket(client_socket)
+
+    try:
+        client_socket.settimeout(2)
+        client_socket.connect((host, port))
+
+        request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\n\r\n"
+        client_socket.send(request.encode())
+
+        response = b""
+        while True:
+            try:
+                data = client_socket.recv(1024)
+                if not data:
+                    break
+                
+                response += data
+            
+            except socket.timeout:
+                break
+
+        resp_data = response.decode('utf-8', errors='ignore')
+        cache_response(url, resp_data)
+
+        return resp_data
+    
+    finally:
+        client_socket.close()
+        
+def handle_html_or_json(url):
+    if is_cached(url):
+        print("Retrieving cached response for:", url)
+        return retrieve_cached_response(url)
+    
+    response = make_http_request(url)
+    
+    if 'text/html' in response:
+        parsed_response = parse_html(response)
+        cache_response(url, parsed_response)  
+        return parsed_response
+   
+    elif 'application/json' in response:
+        try:
+            json_data = json.loads(response)
+            print("JSON Response:")
+            print(json.dumps(json_data, separators=(',', ':')))
+            return json_data
+        except json.JSONDecodeError:
+            print("Error: Unable to parse JSON data")
+    else:
+        print("Unsupported content type:", response) 
+    
 
 def parse_html(response):
     soup = BeautifulSoup(response, 'html.parser')
@@ -103,7 +127,7 @@ def parse_html(response):
     return all_info
 
 def search(term):
-    search_url = "https://en.wikipedia.org/wiki/WebSocket"
+    search_url = "https://tinydb.readthedocs.io/en/latest/usage.html"
     all_info = make_http_request(search_url)
     matching_info = [info for info in all_info if term.lower() in info.lower()]
     return matching_info[:10]
@@ -126,7 +150,7 @@ def main():
         url_index = args.index('-u') + 1
         if url_index < len(args):
             url = args[url_index]
-            response = make_http_request(url)
+            response = handle_html_or_json(url)
             print("Information extracted from", url, ":")
             for info in response:
                 print(info)
