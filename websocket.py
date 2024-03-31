@@ -3,6 +3,25 @@ import socket
 import ssl
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
+import json 
+import hashlib
+from tinydb import TinyDB, Query
+
+cache_file = "cache.json"
+db = TinyDB(cache_file)
+
+def hash_url(url):
+    return hashlib.md5(url.encode()).hexdigest()
+
+def cache_response(url, response):
+    db.insert({'url': hash_url(url), 'response': response})
+
+def is_cached(url):
+    return db.contains(Query().url == hash_url(url))
+
+def retrieve_cached_response(url):
+    result = db.get(Query().url == hash_url(url))
+    return result['response']
 
 def make_tcp_request(url):
     try:
@@ -21,9 +40,44 @@ def make_tcp_request(url):
                         break
                     response += data
 
-        return response.decode()
+        return response.decode()  
     except Exception as e:
         return str(e)
+
+def make_http_request(url):
+    try:
+        if is_cached(url):
+            print("Retrieving cached response for:", url)
+            return retrieve_cached_response(url)
+        
+        response = make_tcp_request(url)
+        
+        if '\r\n\r\n' in response:
+            status_line, headers_and_body = response.split('\r\n\r\n', 1)
+            status_code = int(status_line.split()[1])
+            headers = dict(header.split(": ", 1) for header in status_line.split("\r\n")[1:])
+            content_type = headers.get('Content-Type')
+
+            if status_code == 200:
+                if content_type:
+                    if 'text/html' in content_type:
+                        parsed_response = parse_html(headers_and_body)
+                        cache_response(url, parsed_response)  # Cache HTML responses
+                        return parsed_response
+                    elif 'application/json' in content_type:
+                        json_data = json.loads(headers_and_body)
+                        cache_response(url, json_data)  # Cache JSON responses
+                        return json_data
+                    else:
+                        return [f"Unsupported content type: {content_type}"]
+                else:
+                    return [f"Error: Content-Type header not found"]
+            else:
+                return [f"Error: Server returned status code {status_code}"]
+        else:
+            return [f"Error: Invalid HTTP response format"]
+    except Exception as e:
+        return [str(e)]
 
 def parse_html(response):
     soup = BeautifulSoup(response, 'html.parser')
@@ -47,18 +101,6 @@ def parse_html(response):
     all_info += links_href
 
     return all_info
-
-def make_http_request(url):
-    try:
-        response = make_tcp_request(url)
-        status_line, headers_and_body = response.split('\r\n', 1)
-        status_code = int(status_line.split()[1])
-        if status_code == 200:
-            return parse_html(headers_and_body)
-        else:
-            return [f"Error: Server returned status code {status_code}"]
-    except Exception as e:
-        return [str(e)]
 
 def search(term):
     search_url = "https://en.wikipedia.org/wiki/WebSocket"
