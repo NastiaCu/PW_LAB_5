@@ -16,10 +16,10 @@ def hash_url(url):
 def cache_response(url, response):
     if 'text/html' in response:
         parsed_response = parse_html(response)
-        db.insert({'url': hash_url(url), 'response': parsed_response})
     else:
-        db.insert({'url': hash_url(url), 'response': json.dumps(response, separators=(',', ':'))
-})
+        parsed_response = response
+    
+    db.insert({'url': hash_url(url), 'response': parsed_response})
 
 def is_cached(url):
     return db.contains(Query().url == hash_url(url))
@@ -82,26 +82,33 @@ def make_http_request(url):
 def handle_html_or_json(url):
     if is_cached(url):
         print("Retrieving cached response for:", url)
-        return retrieve_cached_response(url)
+        response = retrieve_cached_response(url)
+    else:
+        response = make_http_request(url)
+        print("Response from", url, ":")
+        print(response)
     
-    response = make_http_request(url)
+    if response is None:
+        print("Error: Empty response received")
+        return
     
     if 'text/html' in response:
-        parsed_response = parse_html(response)
-        cache_response(url, parsed_response)  
-        return parsed_response
-   
+        try:
+            parsed_response = parse_html(response)
+            cache_response(url, parsed_response)  
+            return parsed_response
+        except Exception as e:
+            print("Error: Unable to parse HTML data:", e)
     elif 'application/json' in response:
         try:
             json_data = json.loads(response)
             print("JSON Response:")
-            print(json.dumps(json_data, separators=(',', ':')))
+            print(json.dumps(json_data, indent=4))
             return json_data
-        except json.JSONDecodeError:
-            print("Error: Unable to parse JSON data")
+        except json.JSONDecodeError as e:
+            print("Error: Unable to parse JSON data:", e)
     else:
-        print("Unsupported content type:", response) 
-    
+        print(response)
 
 def parse_html(response):
     soup = BeautifulSoup(response, 'html.parser')
@@ -152,8 +159,11 @@ def main():
             url = args[url_index]
             response = handle_html_or_json(url)
             print("Information extracted from", url, ":")
-            for info in response:
-                print(info)
+            if isinstance(response, list):
+                for info in response:
+                    print(info)
+            elif isinstance(response, dict):
+                pass
         else:
             print("Error: No URL provided after -u")
             sys.exit()
