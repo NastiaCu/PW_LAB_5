@@ -28,6 +28,25 @@ def retrieve_cached_response(url):
     result = db.get(Query().url == hash_url(url))
     return result['response']
 
+def print_cached_response(response):
+    if isinstance(response, list):
+        for item in response:
+            if item.startswith('--'):
+                print(item)
+            elif item.startswith('- '):
+                print(f"  {item}")
+            else:
+                print(f"- {item}")
+    elif isinstance(response, str):
+        print("JSON Response:")
+        try:
+            json_data = json.loads(response.split('\r\n\r\n', 1)[1])
+            print(json.dumps(json_data, indent=4))
+        except json.JSONDecodeError as e:
+            print("Error: Unable to parse JSON data:", e)
+    else:
+        print("Unknown response type")
+
 def extract_url_data(url):
     parsed_url = urlparse(url)
 
@@ -83,15 +102,10 @@ def handle_html_or_json(url):
     if is_cached(url):
         print("Retrieving cached response for:", url)
         response = retrieve_cached_response(url)
+        print_cached_response(response)
+        return response
     else:
         response = make_http_request(url)
-        print("Response from", url, ":")
-        print(response)
-    
-    if response is None:
-        print("Error: Empty response received")
-        return
-    
     if 'text/html' in response:
         try:
             parsed_response = parse_html(response)
@@ -101,7 +115,7 @@ def handle_html_or_json(url):
             print("Error: Unable to parse HTML data:", e)
     elif 'application/json' in response:
         try:
-            json_data = json.loads(response)
+            json_data = json.loads(response.split('\r\n\r\n', 1)[1])
             print("JSON Response:")
             print(json.dumps(json_data, indent=4))
             return json_data
