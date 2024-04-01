@@ -149,9 +149,20 @@ def parse_html(response):
 
 def search(term):
     search_url = "https://tinydb.readthedocs.io/en/latest/usage.html"
-    all_info = make_http_request(search_url)
-    matching_info = [info for info in all_info if term.lower() in info.lower()]
-    return matching_info[:10]
+    if is_cached(search_url):
+        response = retrieve_cached_response(search_url)
+    else:
+        print("Retrieving response for", search_url, "...")
+        response = handle_html_or_json(search_url)
+        cache_response(search_url, response)
+
+    matching_info = [info for info in response if term.lower() in info.lower()]
+    if matching_info:
+        print("Search results for", term, ":")
+        for info in matching_info[:10]:
+            print(info)
+    else:
+        print("No matching results found for", term)
 
 def print_error():
     print("No option provided.")
@@ -186,10 +197,7 @@ def main():
         search_index = args.index('-s') + 1
         if search_index < len(args):
             term = ' '.join(args[search_index:])
-            response = search(term)
-            print("Search results for", term, ":")
-            for info in response:
-                print(info)
+            search(term)
         else:
             print("Error: No search term provided after -s")
             sys.exit()
